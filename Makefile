@@ -1,19 +1,19 @@
 SHELL=/bin/bash -o pipefail
 
 build:
-	go build
-	go vet
+	go build ./...
+	go vet ./...
 
 test:
 	golint
-	go test -cover
+	go test -cover ./...
 
 coverage:
 	go test -coverprofile=coverage.out -test.outputdir . --
 	go tool cover -html=coverage.out
 
 fmt:
-	gofmt -w *.go
+	go fmt ./...
 
 clean:
 	go clean

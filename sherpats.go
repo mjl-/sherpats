@@ -1,22 +1,21 @@
 package sherpats
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
-	"flag"
 	"fmt"
-	"log"
+	"io"
 	"os"
 	"strings"
 
-	"bitbucket.org/mjl/sherpa"
+	"github.com/mjl-/sherpadoc"
 )
 
 type sherpaType interface {
 	TypescriptType() string
 }
 
-// baseType can be one of: "any", "bool", "int", "float", "string".
+// baseType can be one of: "any", "int16", etc
 type baseType struct {
 	Name string
 }
@@ -43,8 +42,14 @@ type identType struct {
 
 func (t baseType) TypescriptType() string {
 	switch t.Name {
-	case "int", "float":
+	case "bool":
+		return "boolean"
+	case "timestamp":
+		return "string"
+	case "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64", "float32", "float64":
 		return "number"
+	case "int64s", "uint64s":
+		return "string"
 	default:
 		return t.Name
 	}
@@ -66,146 +71,208 @@ func (t identType) TypescriptType() string {
 	return t.Name
 }
 
-func check(err error, action string) {
-	if err != nil {
-		log.Fatalf("%s: %s\n", action, err)
-	}
-}
+type genError error
 
-// Main reads sherpadoc from stdin and writes a typescript module to
-// stdout.  It requires exactly one parameter: a baseURL for the API,
-// or the API name. If the value has no slash, it is an API name. In
-// this case the baseURL is made by concatenating the base URL of the
-// javascript location with the API name.
-// It is a separate command so it can easily be vendored a repository.
-func Main() {
-	log.SetFlags(0)
-	log.SetPrefix("sherpats: ")
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "%s { API name | baseURL }\n", os.Args[0])
-		flag.PrintDefaults()
-		os.Exit(2)
-	}
-	flag.Parse()
-	args := flag.Args()
-	if len(args) != 1 {
-		log.Print("unexpected arguments")
-		flag.Usage()
-		os.Exit(2)
-	}
-	apiName := args[0]
+// Generate reads sherpadoc from in and writes a typescript file containing a
+// client package to out.  apiNameBaseURL is either an API name or sherpa
+// baseURL, depending on whether it contains a slash. If it is a package name, the
+// baseURL is created at runtime by adding the packageName to the current location.
+func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error) {
+	defer func() {
+		e := recover()
+		if e == nil {
+			return
+		}
+		g, ok := e.(genError)
+		if !ok {
+			panic(e)
+		}
+		retErr = error(g)
+	}()
 
-	var doc sherpa.Doc
+	var doc sherpadoc.Section
 	err := json.NewDecoder(os.Stdin).Decode(&doc)
-	check(err, "parsing sherpadoc json from stdin")
+	if err != nil {
+		panic(genError(fmt.Errorf("parsing sherpadoc json: %s", err)))
+	}
 
 	const sherpadocVersion = 1
-	if doc.Version != sherpadocVersion {
-		log.Fatalf("unexpected sherpadoc version %d, expected %d\n", doc.Version, sherpadocVersion)
+	if doc.SherpadocVersion != sherpadocVersion {
+		panic(genError(fmt.Errorf("unexpected sherpadoc version %d, expected %d", doc.SherpadocVersion, sherpadocVersion)))
 	}
 
-	// Use bytes.Buffer, writes won't fail. We do one big write at the end. Modules won't quickly become too big to fit in memory.
-	out := &bytes.Buffer{}
+	// Validate the sherpadoc.
+	err = sherpadoc.Check(&doc)
+	if err != nil {
+		panic(genError(err))
+	}
 
-	// Check all referenced types exist.
-	checkTypes(&doc)
-
-	var generateTypes func(sec *sherpa.Doc)
-	generateTypes = func(sec *sherpa.Doc) {
-		for _, t := range sec.Types {
-			for _, line := range commentLines(t.Text) {
-				fmt.Fprintf(out, "// %s\n", line)
-			}
-			fmt.Fprintf(out, "export interface %s {\n", t.Name)
-			for _, f := range t.Fields {
-				lines := commentLines(f.Text)
-				if len(lines) > 1 {
-					for _, line := range lines {
-						fmt.Fprintf(out, "\t// %s\n", line)
-					}
-				}
-				what := fmt.Sprintf("field %s for type %s", f.Name, t.Name)
-				fmt.Fprintf(out, "\t%s: %s", f.Name, typescriptType(what, f.Type))
-				if len(lines) == 1 {
-					fmt.Fprintf(out, "   // %s", lines[0])
-				}
-				fmt.Fprintln(out, "")
-			}
-			fmt.Fprintf(out, "}\n\n")
+	bout := bufio.NewWriter(out)
+	xprintf := func(format string, args ...interface{}) {
+		_, err := fmt.Fprintf(out, format, args...)
+		if err != nil {
+			panic(genError(err))
 		}
+	}
+
+	xprintMultiline := func(indent, docs string, always bool) []string {
+		lines := docLines(docs)
+		if len(lines) == 1 && !always {
+			return lines
+		}
+		for _, line := range lines {
+			xprintf("%s// %s\n", indent, line)
+		}
+		return lines
+	}
+
+	xprintSingleline := func(lines []string) {
+		if len(lines) != 1 {
+			return
+		}
+		xprintf("  // %s", lines[0])
+	}
+
+	var generateTypes func(sec *sherpadoc.Section)
+	generateTypes = func(sec *sherpadoc.Section) {
+		for _, t := range sec.Structs {
+			xprintMultiline("", t.Docs, true)
+			xprintf("export interface %s {\n", t.Name)
+			for _, f := range t.Fields {
+				lines := xprintMultiline("", f.Docs, false)
+				what := fmt.Sprintf("field %s for type %s", f.Name, t.Name)
+				xprintf("\t%s: %s", f.Name, typescriptType(what, f.Typewords))
+				xprintSingleline(lines)
+				xprintf("\n")
+			}
+			xprintf("}\n\n")
+		}
+
+		for _, t := range sec.Ints {
+			xprintMultiline("", t.Docs, true)
+			xprintf("enum %s {\n", t.Name)
+			for _, v := range t.Values {
+				lines := xprintMultiline("\t", v.Docs, false)
+				xprintf("\t%s = %d,", v.Name, v.Value)
+				xprintSingleline(lines)
+				xprintf("\n")
+			}
+			xprintf("}\n\n")
+		}
+
+		for _, t := range sec.Strings {
+			xprintMultiline("", t.Docs, true)
+			xprintf("enum %s {\n", t.Name)
+			for _, v := range t.Values {
+				lines := xprintMultiline("\t", v.Docs, false)
+				s := mustMarshalJSON(v.Value)
+				xprintf("\t%s = %s,", v.Name, s)
+				xprintSingleline(lines)
+				xprintf("\n")
+			}
+			xprintf("}\n\n")
+		}
+
 		for _, subsec := range sec.Sections {
 			generateTypes(subsec)
 		}
 	}
-	generateTypes(&doc)
 
-	var generateFunctionTypes func(sec *sherpa.Doc)
-	generateFunctionTypes = func(sec *sherpa.Doc) {
-		for _, typ := range sec.Types {
-			type typeField struct {
-				Name string
-				Type []string
-			}
-			tstypes := []typeField{}
-			for _, f := range typ.Fields {
-				tstypes = append(tstypes, typeField{f.Name, f.Type})
-			}
-			jst, err := json.Marshal(tstypes)
-			check(err, "marshal type to json")
-			fmt.Fprintf(out, "\t%s: %s,\n", typ.Name, jst)
+	var generateFunctionTypes func(sec *sherpadoc.Section)
+	generateFunctionTypes = func(sec *sherpadoc.Section) {
+		// xxx strip out docs, just bloating the size here...
+		for _, typ := range sec.Structs {
+			xprintf("	%s: %s,\n", mustMarshalJSON(typ.Name), mustMarshalJSON(typ))
 		}
+		for _, typ := range sec.Ints {
+			xprintf("	%s: %s,\n", mustMarshalJSON(typ.Name), mustMarshalJSON(typ))
+		}
+		for _, typ := range sec.Strings {
+			xprintf("	%s: %s,\n", mustMarshalJSON(typ.Name), mustMarshalJSON(typ))
+		}
+
 		for _, subsec := range sec.Sections {
 			generateFunctionTypes(subsec)
 		}
 	}
-	fmt.Fprintln(out, "export const _types: { [typeName: string]: _type } = {")
-	generateFunctionTypes(&doc)
-	fmt.Fprintln(out, "}")
-	fmt.Fprintln(out, "")
 
-	var generateFunctions func(sec *sherpa.Doc)
-	generateFunctions = func(sec *sherpa.Doc) {
-		for _, fn := range sec.Functions {
+	var generateSectionDocs func(sec *sherpadoc.Section)
+	generateSectionDocs = func(sec *sherpadoc.Section) {
+		xprintMultiline("", sec.Docs, true)
+		for _, subsec := range sec.Sections {
+			xprintf("//\n")
+			xprintf("// # %s\n", subsec.Name)
+			generateSectionDocs(subsec)
+		}
+	}
+
+	var generateFunctions func(sec *sherpadoc.Section)
+	generateFunctions = func(sec *sherpadoc.Section) {
+		for i, fn := range sec.Functions {
 			whatParam := "pararameter for " + fn.Name
-			paramTypes := []string{}
+			paramNameTypes := []string{}
 			paramNames := []string{}
 			sherpaParamTypes := [][]string{}
 			for _, p := range fn.Params {
-				v := fmt.Sprintf("%s: %s", p.Name, typescriptType(whatParam, p.Type))
-				paramTypes = append(paramTypes, v)
+				v := fmt.Sprintf("%s: %s", p.Name, typescriptType(whatParam, p.Typewords))
+				paramNameTypes = append(paramNameTypes, v)
 				paramNames = append(paramNames, p.Name)
-				sherpaParamTypes = append(sherpaParamTypes, p.Type)
+				sherpaParamTypes = append(sherpaParamTypes, p.Typewords)
 			}
 
 			var returnType string
-			switch len(fn.Return) {
+			switch len(fn.Returns) {
 			case 0:
 				returnType = "void"
 			case 1:
 				what := "return type for " + fn.Name
-				returnType = typescriptType(what, fn.Return[0].Type)
+				returnType = typescriptType(what, fn.Returns[0].Typewords)
 			default:
 				var types []string
 				what := "return type for " + fn.Name
-				for _, t := range fn.Return {
-					types = append(types, typescriptType(what, t.Type))
+				for _, t := range fn.Returns {
+					types = append(types, typescriptType(what, t.Typewords))
 				}
 				returnType = fmt.Sprintf("[%s]", strings.Join(types, ", "))
 			}
 			sherpaReturnTypes := [][]string{}
-			for _, a := range fn.Return {
-				sherpaReturnTypes = append(sherpaReturnTypes, a.Type)
+			for _, a := range fn.Returns {
+				sherpaReturnTypes = append(sherpaReturnTypes, a.Typewords)
 			}
 
-			sherpaParamTypesJSON, err := json.Marshal(sherpaParamTypes)
-			check(err, "marshal sherpa param types")
-			sherpaReturnTypesJSON, err := json.Marshal(sherpaReturnTypes)
-			check(err, "marshal sherpa return types")
-
-			fmt.Fprintf(out, "export const %s = (%s, options?: Options): Promise<%s> => { return _sherpaCall(options || {}, %s, %s, '%s', [%s]) as Promise<%s> }\n", fn.Name, strings.Join(paramTypes, ", "), returnType, sherpaParamTypesJSON, sherpaReturnTypesJSON, fn.Name, strings.Join(paramNames, ", "), returnType)
+			xprintMultiline("\t", fn.Docs, true)
+			xprintf("\tasync %s(%s): Promise<%s> {\n", fn.Name, strings.Join(paramNameTypes, ", "), returnType)
+			xprintf("\t\tconst fn: string = %s\n", mustMarshalJSON(fn.Name))
+			xprintf("\t\tconst paramTypes: string[][] = %s\n", mustMarshalJSON(sherpaParamTypes))
+			xprintf("\t\tconst returnTypes: string[][] = %s\n", mustMarshalJSON(sherpaReturnTypes))
+			xprintf("\t\tconst params: any[] = [%s]\n", strings.Join(paramNames, ", "))
+			xprintf("\t\treturn await _sherpaCall({ ...this.options }, paramTypes, returnTypes, fn, params) as %s\n", returnType)
+			xprintf("\t}\n")
+			if i < len(sec.Functions)-1 {
+				xprintf("\n")
+			}
 		}
 	}
+
+	generateTypes(&doc)
+	xprintf("export const types: typeMap = {\n")
+	generateFunctionTypes(&doc)
+	xprintf("}\n\n")
+	generateSectionDocs(&doc)
+	xprintf(`export class Client {
+	constructor(public options?: Options) {
+		if (!options) {
+			this.options = {}
+		}
+	}
+
+	withOptions(options: Options): Client {
+		return new Client({ ...this.options, ...options })
+	}
+
+`)
 	generateFunctions(&doc)
+	xprintf("}\n\n")
 
 	const findBaseURL = `(function() {
 	let p = location.pathname
@@ -218,16 +285,18 @@ func Main() {
 })()`
 
 	var apiJS string
-	if strings.Contains(apiName, "/") {
-		buf, err := json.Marshal(apiName)
-		check(err, "marshal apiName")
-		apiJS = string(buf)
+	if strings.Contains(apiNameBaseURL, "/") {
+		apiJS = mustMarshalJSON(apiNameBaseURL)
 	} else {
-		apiJS = strings.Replace(findBaseURL, "API_NAME", apiName, -1)
+		apiJS = strings.Replace(findBaseURL, "API_NAME", apiNameBaseURL, -1)
 	}
-	fmt.Fprintln(out, strings.Replace(libTS, "BASEURL", apiJS, -1))
-	_, err = os.Stdout.Write(out.Bytes())
-	check(err, "write to stdout")
+	xprintf("%s%s\n", sherpadocTS, strings.Replace(libTS, "BASEURL", apiJS, -1))
+
+	err = bout.Flush()
+	if err != nil {
+		panic(genError(err))
+	}
+	return nil
 }
 
 func typescriptType(what string, typeTokens []string) string {
@@ -238,14 +307,14 @@ func typescriptType(what string, typeTokens []string) string {
 func parseType(what string, tokens []string) sherpaType {
 	checkOK := func(ok bool, v interface{}, msg string) {
 		if !ok {
-			log.Fatalf("invalid type for %s: %s, saw %q\n", what, msg, v)
+			panic(genError(fmt.Errorf("invalid type for %s: %s, saw %q", what, msg, v)))
 		}
 	}
 	checkOK(len(tokens) > 0, tokens, "need at least one element")
 	s := tokens[0]
 	tokens = tokens[1:]
 	switch s {
-	case "any", "bool", "int", "float", "string":
+	case "any", "bool", "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64", "int64s", "uint64s", "float32", "float64", "string", "timestamp":
 		if len(tokens) != 0 {
 			checkOK(false, tokens, "leftover tokens after base type")
 		}
@@ -264,10 +333,18 @@ func parseType(what string, tokens []string) sherpaType {
 	}
 }
 
-func commentLines(s string) []string {
+func docLines(s string) []string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil
 	}
 	return strings.Split(s, "\n")
+}
+
+func mustMarshalJSON(v interface{}) string {
+	buf, err := json.Marshal(v)
+	if err != nil {
+		panic(genError(fmt.Errorf("marshalling json: %s", err)))
+	}
+	return string(buf)
 }

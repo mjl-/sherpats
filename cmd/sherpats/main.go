@@ -8,8 +8,35 @@
 // 	sherpats < myapi.json > myapi.ts
 package main
 
-import "github.com/mjl-/sherpats"
+import (
+	"flag"
+	"log"
+	"os"
+
+	"github.com/mjl-/sherpats"
+)
+
+func check(err error, action string) {
+	if err != nil {
+		log.Fatalf("%s: %s\n", action, err)
+	}
+}
 
 func main() {
-	sherpats.Main()
+	log.SetFlags(0)
+	flag.Usage = func() {
+		log.Println("usage: sherpats { API name | baseURL }")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 1 {
+		log.Print("unexpected arguments")
+		flag.Usage()
+		os.Exit(2)
+	}
+	apiName := args[0]
+
+	err := sherpats.Generate(os.Stdin, os.Stdout, apiName)
+	check(err, "generating typescript client")
 }
