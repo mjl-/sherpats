@@ -71,7 +71,7 @@ func (t identType) TypescriptType() string {
 	return t.Name
 }
 
-type genError error
+type genError struct{ error }
 
 // Generate reads sherpadoc from in and writes a typescript file containing a
 // client package to out.  apiNameBaseURL is either an API name or sherpa
@@ -93,25 +93,25 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 	var doc sherpadoc.Section
 	err := json.NewDecoder(os.Stdin).Decode(&doc)
 	if err != nil {
-		panic(genError(fmt.Errorf("parsing sherpadoc json: %s", err)))
+		panic(genError{fmt.Errorf("parsing sherpadoc json: %s", err)})
 	}
 
 	const sherpadocVersion = 1
 	if doc.SherpadocVersion != sherpadocVersion {
-		panic(genError(fmt.Errorf("unexpected sherpadoc version %d, expected %d", doc.SherpadocVersion, sherpadocVersion)))
+		panic(genError{fmt.Errorf("unexpected sherpadoc version %d, expected %d", doc.SherpadocVersion, sherpadocVersion)})
 	}
 
 	// Validate the sherpadoc.
 	err = sherpadoc.Check(&doc)
 	if err != nil {
-		panic(genError(err))
+		panic(genError{err})
 	}
 
 	bout := bufio.NewWriter(out)
 	xprintf := func(format string, args ...interface{}) {
 		_, err := fmt.Fprintf(out, format, args...)
 		if err != nil {
-			panic(genError(err))
+			panic(genError{err})
 		}
 	}
 
@@ -294,7 +294,7 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 
 	err = bout.Flush()
 	if err != nil {
-		panic(genError(err))
+		panic(genError{err})
 	}
 	return nil
 }
@@ -307,7 +307,7 @@ func typescriptType(what string, typeTokens []string) string {
 func parseType(what string, tokens []string) sherpaType {
 	checkOK := func(ok bool, v interface{}, msg string) {
 		if !ok {
-			panic(genError(fmt.Errorf("invalid type for %s: %s, saw %q", what, msg, v)))
+			panic(genError{fmt.Errorf("invalid type for %s: %s, saw %q", what, msg, v)})
 		}
 	}
 	checkOK(len(tokens) > 0, tokens, "need at least one element")
@@ -344,7 +344,7 @@ func docLines(s string) []string {
 func mustMarshalJSON(v interface{}) string {
 	buf, err := json.Marshal(v)
 	if err != nil {
-		panic(genError(fmt.Errorf("marshalling json: %s", err)))
+		panic(genError{fmt.Errorf("marshalling json: %s", err)})
 	}
 	return string(buf)
 }
