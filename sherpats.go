@@ -11,6 +11,75 @@ import (
 	"github.com/mjl-/sherpadoc"
 )
 
+// Keywords in Typescript, from https://github.com/microsoft/TypeScript/blob/master/doc/spec.md.
+var keywords = map[string]struct{}{
+	"break":       {},
+	"case":        {},
+	"catch":       {},
+	"class":       {},
+	"const":       {},
+	"continue":    {},
+	"debugger":    {},
+	"default":     {},
+	"delete":      {},
+	"do":          {},
+	"else":        {},
+	"enum":        {},
+	"export":      {},
+	"extends":     {},
+	"false":       {},
+	"finally":     {},
+	"for":         {},
+	"function":    {},
+	"if":          {},
+	"import":      {},
+	"in":          {},
+	"instanceof":  {},
+	"new":         {},
+	"null":        {},
+	"return":      {},
+	"super":       {},
+	"switch":      {},
+	"this":        {},
+	"throw":       {},
+	"true":        {},
+	"try":         {},
+	"typeof":      {},
+	"var":         {},
+	"void":        {},
+	"while":       {},
+	"with":        {},
+	"implements":  {},
+	"interface":   {},
+	"let":         {},
+	"package":     {},
+	"private":     {},
+	"protected":   {},
+	"public":      {},
+	"static":      {},
+	"yield":       {},
+	"any":         {},
+	"boolean":     {},
+	"number":      {},
+	"string":      {},
+	"symbol":      {},
+	"abstract":    {},
+	"as":          {},
+	"async":       {},
+	"await":       {},
+	"constructor": {},
+	"declare":     {},
+	"from":        {},
+	"get":         {},
+	"is":          {},
+	"module":      {},
+	"namespace":   {},
+	"of":          {},
+	"require":     {},
+	"set":         {},
+	"type":        {},
+}
+
 type sherpaType interface {
 	TypescriptType() string
 }
@@ -133,15 +202,37 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 		xprintf("  // %s", lines[0])
 	}
 
+	// Type and function names could be typescript keywords. If they are, give them a different name.
+	typescriptNames := map[string]string{}
+	typescriptName := func(name string, names map[string]string) string {
+		if _, ok := keywords[name]; !ok {
+			return name
+		}
+		n := names[name]
+		if n != "" {
+			return n
+		}
+		for i := 0; ; i++ {
+			n = fmt.Sprintf("%s%d", name, i)
+			if _, ok := names[n]; ok {
+				continue
+			}
+			names[name] = n
+			return n
+		}
+	}
+
 	var generateTypes func(sec *sherpadoc.Section)
 	generateTypes = func(sec *sherpadoc.Section) {
 		for _, t := range sec.Structs {
 			xprintMultiline("", t.Docs, true)
-			xprintf("export interface %s {\n", t.Name)
+			name := typescriptName(t.Name, typescriptNames)
+			xprintf("export interface %s {\n", name)
+			names := map[string]string{}
 			for _, f := range t.Fields {
 				lines := xprintMultiline("", f.Docs, false)
 				what := fmt.Sprintf("field %s for type %s", f.Name, t.Name)
-				xprintf("\t%s: %s", f.Name, typescriptType(what, f.Typewords))
+				xprintf("\t%s: %s", typescriptName(f.Name, names), typescriptType(what, f.Typewords))
 				xprintSingleline(lines)
 				xprintf("\n")
 			}
@@ -150,10 +241,12 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 
 		for _, t := range sec.Ints {
 			xprintMultiline("", t.Docs, true)
-			xprintf("enum %s {\n", t.Name)
+			name := typescriptName(t.Name, typescriptNames)
+			xprintf("enum %s {\n", name)
+			names := map[string]string{}
 			for _, v := range t.Values {
 				lines := xprintMultiline("\t", v.Docs, false)
-				xprintf("\t%s = %d,", v.Name, v.Value)
+				xprintf("\t%s = %d,", typescriptName(v.Name, names), v.Value)
 				xprintSingleline(lines)
 				xprintf("\n")
 			}
@@ -162,11 +255,13 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 
 		for _, t := range sec.Strings {
 			xprintMultiline("", t.Docs, true)
-			xprintf("enum %s {\n", t.Name)
+			name := typescriptName(t.Name, typescriptNames)
+			xprintf("enum %s {\n", name)
+			names := map[string]string{}
 			for _, v := range t.Values {
 				lines := xprintMultiline("\t", v.Docs, false)
 				s := mustMarshalJSON(v.Value)
-				xprintf("\t%s = %s,", v.Name, s)
+				xprintf("\t%s = %s,", typescriptName(v.Name, names), s)
 				xprintSingleline(lines)
 				xprintf("\n")
 			}
@@ -213,10 +308,12 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 			paramNameTypes := []string{}
 			paramNames := []string{}
 			sherpaParamTypes := [][]string{}
+			names := map[string]string{}
 			for _, p := range fn.Params {
-				v := fmt.Sprintf("%s: %s", p.Name, typescriptType(whatParam, p.Typewords))
+				name := typescriptName(p.Name, names)
+				v := fmt.Sprintf("%s: %s", name, typescriptType(whatParam, p.Typewords))
 				paramNameTypes = append(paramNameTypes, v)
-				paramNames = append(paramNames, p.Name)
+				paramNames = append(paramNames, name)
 				sherpaParamTypes = append(sherpaParamTypes, p.Typewords)
 			}
 
@@ -240,8 +337,9 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 				sherpaReturnTypes = append(sherpaReturnTypes, a.Typewords)
 			}
 
+			name := typescriptName(fn.Name, typescriptNames)
 			xprintMultiline("\t", fn.Docs, true)
-			xprintf("\tasync %s(%s): Promise<%s> {\n", fn.Name, strings.Join(paramNameTypes, ", "), returnType)
+			xprintf("\tasync %s(%s): Promise<%s> {\n", name, strings.Join(paramNameTypes, ", "), returnType)
 			xprintf("\t\tconst fn: string = %s\n", mustMarshalJSON(fn.Name))
 			xprintf("\t\tconst paramTypes: string[][] = %s\n", mustMarshalJSON(sherpaParamTypes))
 			xprintf("\t\tconst returnTypes: string[][] = %s\n", mustMarshalJSON(sherpaReturnTypes))
