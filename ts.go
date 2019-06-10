@@ -1,9 +1,11 @@
 package sherpats
 
-const sherpadocTS = `// sherpadocTS
-export const supportedSherpaVersion = 0
+const libTS = `const baseURL = BASEURL
 
-export type NamedType = Struct | Strings | Ints
+// NOTE: code below is shared between github.com/mjl-/sherpaweb and github.com/mjl-/sherpats.
+// KEEP IN SYNC.
+
+export const supportedSherpaVersion = 1
 
 export function isStruct(t: NamedType): t is Struct {
 	return 'Fields' in t
@@ -73,137 +75,162 @@ export interface Strings {
 		Docs: string
 	}[]
 }
-`
 
-const libTS = `
-// libTS
-const baseURL = BASEURL
+export type NamedType = Struct | Strings | Ints
+export type TypenameMap = { [k: string]: NamedType }
 
-type typeMap = { [name: string]: NamedType }
-
-// verify typechecks "v" against "typewords", returning a new (possibly modified) value for JSON-encoding.
-// Path is a JS-like notation of the path to the value being typechecked, used for error messages.
+// verifyArg typechecks "v" against "typewords", returning a new (possibly modified) value for JSON-encoding.
 // toJS indicate if the data is coming into JS. If so, timestamps are turned into JS Dates. Otherwise, JS Dates are turned into strings.
-const verify = (path: string, v: any, typewords: string[], toJS: boolean): any => {
-	typewords = typewords.slice(0)
-	const ww = typewords.shift()
+// allowUnknownKeys configures whether unknown keys in structs are allowed.
+// types are the named types of the API.
+export const verifyArg = (path: string, v: any, typewords: string[], toJS: boolean, allowUnknownKeys: boolean, types: TypenameMap): any => {
+	return new verifier(types, toJS, allowUnknownKeys).verify(path, v, typewords)
+}
 
-	const error = (msg: string) => {
-		throw new Error('verify: ' + msg + ' at ' + path)
+class verifier {
+	constructor(private types: TypenameMap, private toJS: boolean, private allowUnknownKeys: boolean) {
 	}
 
-	if (typeof ww !== 'string') {
-		error('bad typewords')
-		return // should not be necessary, typescript doesn't see error always throws an exception?
-	}
-	const w: string = ww
+	verify(path: string, v: any, typewords: string[]): any {
+		typewords = typewords.slice(0)
+		const ww = typewords.shift()
 
-	const ensure = (ok: boolean, expect: string): any => {
-		if (!ok) {
-			error('invalid value ' + JSON.stringify(v) + ' for typeword ' + w + ': expected ' + expect)
+		const error = (msg: string) => {
+			if (path != '') {
+				msg = path + ': ' + msg
+			}
+			throw new Error(msg)
 		}
-		return v
-	}
 
-	switch (w) {
-	case 'nullable':
-		if (v === null) {
+		if (typeof ww !== 'string') {
+			error('bad typewords')
+			return // should not be necessary, typescript doesn't see error always throws an exception?
+		}
+		const w: string = ww
+
+		const ensure = (ok: boolean, expect: string): any => {
+			if (!ok) {
+				error('got ' + JSON.stringify(v) +  ', expected ' + expect)
+			}
 			return v
 		}
-		return verify(path, v, typewords, toJS)
-	case '[]':
-		ensure(Array.isArray(v), "array")
-		return v.map((e: any, i: number) => verify(path + '[' + i + ']', e, typewords, toJS))
-	case '{}':
-		ensure(v === null || typeof v !== 'object', "object")
-		const r: any = {}
-		for (const k in v) {
-			r[k] = verify(path + '.' + k, v[k], typewords, toJS)
-		}
-		return r
-	}
 
-	ensure(typewords.length == 0, "empty typewords")
-	const t = typeof v
-	switch (w) {
-	case 'any':
-		return v
-	case 'bool':
-		ensure(t === 'boolean', 'bool')
-		return v
-	case 'int8':
-	case 'uint8':
-	case 'int16':
-	case 'uint16':
-	case 'int32':
-	case 'uint32':
-	case 'int64':
-	case 'uint64':
-		ensure(t === 'number' && Number.isInteger(v), 'integer')
-		return v
-	case 'float32':
-	case 'float64':
-		ensure(t === 'number', 'float')
-		return v
-	case 'int64s':
-	case 'uint64s':
-		ensure(t === 'number' && Number.isInteger(v) || t === 'string', 'integer fitting in float without precision loss, or string')
-		return '' + v
-	case 'string':
-		ensure(t === 'string', 'string')
-		return v
-	case 'timestamp':
-		if (toJS) {
-			ensure(t === 'string', 'string, with timestamp')
-			try {
-				return new Date(v)
-			} catch (err) {
-				error('could not parse date ' + v + ': ' + err)
+		switch (w) {
+		case 'nullable':
+			if (v === null) {
+				return v
 			}
+			return this.verify(path, v, typewords)
+		case '[]':
+			ensure(Array.isArray(v), "array")
+			return v.map((e: any, i: number) => this.verify(path + '[' + i + ']', e, typewords))
+		case '{}':
+			ensure(v !== null || typeof v === 'object', "object")
+			const r: any = {}
+			for (const k in v) {
+				r[k] = this.verify(path + '.' + k, v[k], typewords)
+			}
+			return r
+		}
+
+		ensure(typewords.length == 0, "empty typewords")
+		const t = typeof v
+		switch (w) {
+		case 'any':
+			return v
+		case 'bool':
+			ensure(t === 'boolean', 'bool')
+			return v
+		case 'int8':
+		case 'uint8':
+		case 'int16':
+		case 'uint16':
+		case 'int32':
+		case 'uint32':
+		case 'int64':
+		case 'uint64':
+			ensure(t === 'number' && Number.isInteger(v), 'integer')
+			return v
+		case 'float32':
+		case 'float64':
+			ensure(t === 'number', 'float')
+			return v
+		case 'int64s':
+		case 'uint64s':
+			ensure(t === 'number' && Number.isInteger(v) || t === 'string', 'integer fitting in float without precision loss, or string')
+			return '' + v
+		case 'string':
+			ensure(t === 'string', 'string')
+			return v
+		case 'timestamp':
+			if (this.toJS) {
+				ensure(t === 'string', 'string, with timestamp')
+				const d = new Date(v)
+				if (d instanceof Date && !isNaN(d.getTime())) {
+					return d
+				}
+				error('invalid date ' + v)
+			} else {
+				ensure(t === 'object' && v !== null, 'non-null object')
+				ensure(v.__proto__ === Date.prototype, 'Date')
+				return v.toISOString()
+			}
+		}
+
+		// We're left with named types.
+		const nt = this.types[w]
+		if (!nt) {
+			error('unknown type ' + w)
+		}
+		if (v === null) {
+			error('bad value ' + v + ' for named type ' + w)
+		}
+
+		if (isStruct(nt)) {
+			if (typeof v !== 'object') {
+				error('bad value ' + v + ' for struct ' + w)
+			}
+
+			const r: any = {}
+			for (const f of nt.Fields) {
+				r[f.Name] = this.verify(path + '.' + f.Name, v[f.Name], f.Typewords)
+			}
+			// If going to JSON also verify no unknown fields are present.
+			if (!this.allowUnknownKeys) {
+				const known: { [key: string]: boolean } = {}
+				for (const f of nt.Fields) {
+					known[f.Name] = true
+				}
+				Object.keys(v).forEach((k) => {
+					if (!known[k]) {
+						error('unknown key ' + k + ' for struct ' + w)
+					}
+				})
+			}
+			return r
+		} else if (isStrings(nt)) {
+			if (typeof v !== 'string') {
+				error('mistyped value ' + v + ' for named strings ' + nt.Name)
+			}
+			for (const sv of nt.Values) {
+				if (sv.Value === v) {
+					return v
+				}
+			}
+			error('unknkown value ' + v + ' for named strings ' + nt.Name)
+		} else if (isInts(nt)) {
+			if (typeof v !== 'number' || !Number.isInteger(v)) {
+				error('mistyped value ' + v + ' for named ints ' + nt.Name)
+			}
+			for (const sv of nt.Values) {
+				if (sv.Value === v) {
+					return v
+				}
+			}
+			error('unknkown value ' + v + ' for named ints ' + nt.Name)
 		} else {
-			ensure(t === 'object' && v !== null, 'non-null object')
-			ensure(v.__proto__ === Date.prototype, 'Date')
-			return v.toISOString()
+			throw new Error('unexpected named type ' + nt)
 		}
-	}
-
-	// We're left with named types.
-	const nt = types[w]
-	if (!nt) {
-		error('unknown type ' + w)
-	}
-	if (v === null || typeof v !== 'object') {
-		error('bad value ' + v + ' for object of named type')
-	}
-
-	if (isStruct(nt)) {
-		const r: any = {}
-		for (const f of nt.Fields) {
-			r[f.Name] = verify(path + '.' + f.Name, v[f.Name], f.Typewords, toJS)
-		}
-		return r
-	} else if (isStrings(nt)) {
-		if (typeof v !== 'string') {
-			error('mistyped value ' + v + ' for named strings ' + nt.Name)
-		}
-		for (const sv of nt.Values) {
-			if (sv.Value === v) {
-				return v
-			}
-		}
-		error('unknkown value ' + v + ' for named strings ' + nt.Name)
-	} else if (isInts(nt)) {
-		if (typeof v !== 'number' || !Number.isInteger(v)) {
-			error('mistyped value ' + v + ' for named ints ' + nt.Name)
-		}
-		for (const sv of nt.Values) {
-			if (sv.Value === v) {
-				return v
-			}
-		}
-		error('unknkown value ' + v + ' for named ints ' + nt.Name)
-	} else {
-		throw new Error('unexpected named type ' + nt)
 	}
 }
 
@@ -220,7 +247,7 @@ const _sherpaCall = async (options: Options, paramTypes: string[][], returnTypes
 		if (params.length !== paramTypes.length) {
 			return Promise.reject({ message: 'wrong number of parameters in sherpa call, saw ' + params.length + ' != expected ' + paramTypes.length })
 		}
-		params = params.map((v: any, index: number) => verify('params[' + index + ']', v, paramTypes[index], false))
+		params = params.map((v: any, index: number) => verifyArg('params[' + index + ']', v, paramTypes[index], false, false, apiTypes))
 	}
 	const simulate = async () => {
 		const config = JSON.parse(window.localStorage.getItem('sherpats-debug') || '{}')
@@ -305,12 +332,12 @@ const _sherpaCall = async (options: Options, paramTypes: string[][], returnTypes
 							throw new Error('function ' + name + ' returned a value while prototype says it returns "void"')
 						}
 					} else if (returnTypes.length === 1) {
-						result = verify('result', result, returnTypes[0], true)
+						result = verifyArg('result', result, returnTypes[0], true, true, apiTypes)
 					} else {
 						if (result.length != returnTypes.length) {
 							throw new Error('wrong number of values returned by ' + name + ', saw ' + result.length + ' != expected ' + returnTypes.length)
 						}
-						result = result.map((v: any, index: number) => verify('result[' + index + ']', v, returnTypes[index], true))
+						result = result.map((v: any, index: number) => verifyArg('result[' + index + ']', v, returnTypes[index], true, true, apiTypes))
 					}
 				} catch (err) {
 					reject1({ code: 'sherpa:badTypes', message: err.message })
