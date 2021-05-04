@@ -1,6 +1,6 @@
 package sherpats
 
-const libTS = `const baseURL = BASEURL
+const libTS = `export const defaultBaseURL = BASEURL
 
 // NOTE: code below is shared between github.com/mjl-/sherpaweb and github.com/mjl-/sherpats.
 // KEEP IN SYNC.
@@ -242,7 +242,7 @@ export interface Options {
 	skipReturnCheck?: boolean
 }
 
-const _sherpaCall = async (options: Options, paramTypes: string[][], returnTypes: string[][], name: string, params: any[]): Promise<any> => {
+const _sherpaCall = async (baseURL: string, options: Options, paramTypes: string[][], returnTypes: string[][], name: string, params: any[]): Promise<any> => {
 	if (!options.skipParamCheck) {
 		if (params.length !== paramTypes.length) {
 			return Promise.reject({ message: 'wrong number of parameters in sherpa call, saw ' + params.length + ' != expected ' + paramTypes.length })

@@ -344,7 +344,7 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 			xprintf("\t\tconst paramTypes: string[][] = %s\n", mustMarshalJSON(sherpaParamTypes))
 			xprintf("\t\tconst returnTypes: string[][] = %s\n", mustMarshalJSON(sherpaReturnTypes))
 			xprintf("\t\tconst params: any[] = [%s]\n", strings.Join(paramNames, ", "))
-			xprintf("\t\treturn await _sherpaCall({ ...this.options }, paramTypes, returnTypes, fn, params) as %s\n", returnType)
+			xprintf("\t\treturn await _sherpaCall(this.baseURL, { ...this.options }, paramTypes, returnTypes, fn, params) as %s\n", returnType)
 			xprintf("\t}\n")
 			if i < len(sec.Functions)-1 {
 				xprintf("\n")
@@ -359,14 +359,14 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 	xprintf("}\n\n")
 	generateSectionDocs(&doc)
 	xprintf(`export class Client {
-	constructor(public options?: Options) {
+	constructor(private baseURL=defaultBaseURL, public options?: Options) {
 		if (!options) {
 			this.options = {}
 		}
 	}
 
 	withOptions(options: Options): Client {
-		return new Client({ ...this.options, ...options })
+		return new Client(this.baseURL, { ...this.options, ...options })
 	}
 
 `)
