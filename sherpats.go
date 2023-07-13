@@ -114,7 +114,7 @@ func (t baseType) TypescriptType() string {
 	case "bool":
 		return "boolean"
 	case "timestamp":
-		return "string"
+		return "Date"
 	case "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64", "float32", "float64":
 		return "number"
 	case "int64s", "uint64s":
@@ -366,7 +366,7 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 			intsTypes[t.Name] = true
 			xprintMultiline("", t.Docs, true)
 			name := typescriptName(t.Name, typescriptNames)
-			xprintf("enum %s {\n", name)
+			xprintf("export enum %s {\n", name)
 			names := map[string]string{}
 			for _, v := range t.Values {
 				lines := xprintMultiline("\t", v.Docs, false)
@@ -381,7 +381,7 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 			stringsTypes[t.Name] = true
 			xprintMultiline("", t.Docs, true)
 			name := typescriptName(t.Name, typescriptNames)
-			xprintf("enum %s {\n", name)
+			xprintf("export enum %s {\n", name)
 			names := map[string]string{}
 			for _, v := range t.Values {
 				lines := xprintMultiline("\t", v.Docs, false)
