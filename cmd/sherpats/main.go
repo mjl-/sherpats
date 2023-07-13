@@ -1,11 +1,12 @@
 // Command sherpats reads documentation from a sherpa API ("sherpadoc")
-// and outputs a documented typescript module that exports all functions
-// and types referenced in that machine-readable documentation.
+// and outputs a documented typescript module, optionally wrapped in a namespace,
+// that exports all functions and types referenced in that machine-readable
+// documentation.
 //
 // Example:
 //
-// 	sherpadoc MyAPI >myapi.json
-// 	sherpats < myapi.json > myapi.ts
+//	sherpadoc MyAPI >myapi.json
+//	sherpats -slices-nullable=true -nullable-optional=true -namespace myapi myapi < myapi.json > myapi.ts
 package main
 
 import (
@@ -24,8 +25,13 @@ func check(err error, action string) {
 
 func main() {
 	log.SetFlags(0)
+
+	var opts sherpats.Options
+	flag.StringVar(&opts.Namespace, "namespace", "", "namespace to enclose generated typescript in")
+	flag.BoolVar(&opts.SlicesNullable, "slices-nullable", false, "generate nullable types in TypeScript for Go slices, to require TypeScript checks for null for slices")
+	flag.BoolVar(&opts.NullableOptional, "nullable-optional", false, "for nullable types (include slices with -slices-nullable=true), generate optional fields in TypeScript and allow undefined as value")
 	flag.Usage = func() {
-		log.Println("usage: sherpats { API name | baseURL }")
+		log.Println("usage: sherpats [flags] { api-path-elem | baseURL }")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -37,6 +43,6 @@ func main() {
 	}
 	apiName := args[0]
 
-	err := sherpats.Generate(os.Stdin, os.Stdout, apiName)
+	err := sherpats.Generate(os.Stdin, os.Stdout, apiName, opts)
 	check(err, "generating typescript client")
 }

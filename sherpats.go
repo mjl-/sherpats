@@ -124,12 +124,28 @@ func (t baseType) TypescriptType() string {
 	}
 }
 
+func isBaseOrIdent(t sherpaType) bool {
+	if _, ok := t.(baseType); ok {
+		return true
+	}
+	if _, ok := t.(identType); ok {
+		return true
+	}
+	return false
+}
+
 func (t nullableType) TypescriptType() string {
-	return t.Type.TypescriptType() + " | null"
+	if isBaseOrIdent(t.Type) {
+		return t.Type.TypescriptType() + " | null"
+	}
+	return "(" + t.Type.TypescriptType() + ") | null"
 }
 
 func (t arrayType) TypescriptType() string {
-	return t.Type.TypescriptType() + "[]"
+	if isBaseOrIdent(t.Type) {
+		return t.Type.TypescriptType() + "[] | null"
+	}
+	return "(" + t.Type.TypescriptType() + ")[] | null"
 }
 
 func (t objectType) TypescriptType() string {
@@ -142,11 +158,33 @@ func (t identType) TypescriptType() string {
 
 type genError struct{ error }
 
+type Options struct {
+	// If not empty, the generated typescript is wrapped in a namespace. This allows
+	// easy compilation, with "tsc --module none" that uses the generated typescript
+	// api, while keeping all types/functions isolated.
+	Namespace string
+
+	// With SlicesNullable, generated typescript types are made nullable, with "|
+	// null". Go's JSON package marshals a nil slice to null, so it can be wise to make
+	// TypeScript consumers check that. Go code typically handles incoming nil and
+	// empty slices in the same way.
+	SlicesNullable bool
+
+	// If nullables are optional, the generated typescript types allow the "undefined"
+	// value where nullable values are expected. This includes slices when
+	// SlicesNullable is set. When JavaScript marshals JSON, a field with the
+	// "undefined" value is treated as if the field doesn't exist, and isn't
+	// marshalled. The "undefined" value in an array is marshalled as null. It is
+	// common (though not always the case!) in Go server code to not make a difference
+	// between a missing field and a null value
+	NullableOptional bool
+}
+
 // Generate reads sherpadoc from in and writes a typescript file containing a
 // client package to out.  apiNameBaseURL is either an API name or sherpa
 // baseURL, depending on whether it contains a slash. If it is a package name, the
 // baseURL is created at runtime by adding the packageName to the current location.
-func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error) {
+func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) (retErr error) {
 	defer func() {
 		e := recover()
 		if e == nil {
@@ -174,6 +212,34 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 	err = sherpadoc.Check(&doc)
 	if err != nil {
 		panic(genError{err})
+	}
+
+	// Make a copy, the ugly way. We'll strip the documentation out before including
+	// the types. We need types for runtime type checking, but the docs just bloat the
+	// size.
+	var typesdoc sherpadoc.Section
+	if typesbuf, err := json.Marshal(doc); err != nil {
+		panic(genError{fmt.Errorf("marshal sherpadoc for types: %s", err)})
+	} else if err := json.Unmarshal(typesbuf, &typesdoc); err != nil {
+		panic(genError{fmt.Errorf("unmarshal sherpadoc for types: %s", err)})
+	}
+	for i := range typesdoc.Structs {
+		typesdoc.Structs[i].Docs = ""
+		for j := range typesdoc.Structs[i].Fields {
+			typesdoc.Structs[i].Fields[j].Docs = ""
+		}
+	}
+	for i := range typesdoc.Ints {
+		typesdoc.Ints[i].Docs = ""
+		for j := range typesdoc.Ints[i].Values {
+			typesdoc.Ints[i].Values[j].Docs = ""
+		}
+	}
+	for i := range typesdoc.Strings {
+		typesdoc.Strings[i].Docs = ""
+		for j := range typesdoc.Strings[i].Values {
+			typesdoc.Strings[i].Values[j].Docs = ""
+		}
 	}
 
 	bout := bufio.NewWriter(out)
@@ -232,7 +298,11 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 			for _, f := range t.Fields {
 				lines := xprintMultiline("", f.Docs, false)
 				what := fmt.Sprintf("field %s for type %s", f.Name, t.Name)
-				xprintf("\t%s: %s", typescriptName(f.Name, names), typescriptType(what, f.Typewords))
+				optional := ""
+				if opts.NullableOptional && f.Typewords[0] == "nullable" || opts.NullableOptional && opts.SlicesNullable && f.Typewords[0] == "[]" {
+					optional = "?"
+				}
+				xprintf("\t%s%s: %s", typescriptName(f.Name, names), optional, typescriptType(what, f.Typewords))
 				xprintSingleline(lines)
 				xprintf("\n")
 			}
@@ -275,14 +345,27 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 
 	var generateFunctionTypes func(sec *sherpadoc.Section)
 	generateFunctionTypes = func(sec *sherpadoc.Section) {
-		// xxx strip out docs, just bloating the size here...
 		for _, typ := range sec.Structs {
 			xprintf("	%s: %s,\n", mustMarshalJSON(typ.Name), mustMarshalJSON(typ))
 		}
 		for _, typ := range sec.Ints {
+			if typ.Values == nil {
+				typ.Values = []struct {
+					Name  string
+					Value int
+					Docs  string
+				}{}
+			}
 			xprintf("	%s: %s,\n", mustMarshalJSON(typ.Name), mustMarshalJSON(typ))
 		}
 		for _, typ := range sec.Strings {
+			if typ.Values == nil {
+				typ.Values = []struct {
+					Name  string
+					Value string
+					Docs  string
+				}{}
+			}
 			xprintf("	%s: %s,\n", mustMarshalJSON(typ.Name), mustMarshalJSON(typ))
 		}
 
@@ -301,8 +384,7 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 		}
 	}
 
-	var generateFunctions func(sec *sherpadoc.Section)
-	generateFunctions = func(sec *sherpadoc.Section) {
+	generateFunctions := func(sec *sherpadoc.Section) {
 		for i, fn := range sec.Functions {
 			whatParam := "pararameter for " + fn.Name
 			paramNameTypes := []string{}
@@ -353,15 +435,18 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 	}
 
 	xprintf("// NOTE: GENERATED by github.com/mjl-/sherpats, DO NOT MODIFY\n\n")
+	if opts.Namespace != "" {
+		xprintf("namespace %s {\n\n", opts.Namespace)
+	}
 	generateTypes(&doc)
 	xprintf("export const apiTypes: TypenameMap = {\n")
-	generateFunctionTypes(&doc)
+	generateFunctionTypes(&typesdoc)
 	xprintf("}\n\n")
 	generateSectionDocs(&doc)
 	xprintf(`export class Client {
 	constructor(private baseURL=defaultBaseURL, public options?: Options) {
 		if (!options) {
-			this.options = {}
+			this.options = {slicesNullable: %v, nullableOptional: %v}
 		}
 	}
 
@@ -369,7 +454,7 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 		return new Client(this.baseURL, { ...this.options, ...options })
 	}
 
-`)
+`, opts.SlicesNullable, opts.NullableOptional)
 	generateFunctions(&doc)
 	xprintf("}\n\n")
 
@@ -390,6 +475,9 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string) (retErr error)
 		apiJS = strings.Replace(findBaseURL, "API_NAME", apiNameBaseURL, -1)
 	}
 	xprintf("%s\n", strings.Replace(libTS, "BASEURL", apiJS, -1))
+	if opts.Namespace != "" {
+		xprintf("}\n")
+	}
 
 	err = bout.Flush()
 	if err != nil {
