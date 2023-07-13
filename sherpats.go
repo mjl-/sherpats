@@ -384,7 +384,8 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 		}
 	}
 
-	generateFunctions := func(sec *sherpadoc.Section) {
+	var generateFunctions func(sec *sherpadoc.Section)
+	generateFunctions = func(sec *sherpadoc.Section) {
 		for i, fn := range sec.Functions {
 			whatParam := "pararameter for " + fn.Name
 			paramNameTypes := []string{}
@@ -431,6 +432,10 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 			if i < len(sec.Functions)-1 {
 				xprintf("\n")
 			}
+		}
+
+		for _, s := range sec.Sections {
+			generateFunctions(s)
 		}
 	}
 
