@@ -336,9 +336,14 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 		}
 	}
 
+	structTypes := map[string]bool{}
+	stringsTypes := map[string]bool{}
+	intsTypes := map[string]bool{}
+
 	var generateTypes func(sec *sherpadoc.Section)
 	generateTypes = func(sec *sherpadoc.Section) {
 		for _, t := range sec.Structs {
+			structTypes[t.Name] = true
 			xprintMultiline("", t.Docs, true)
 			name := typescriptName(t.Name, typescriptNames)
 			xprintf("export interface %s {\n", name)
@@ -358,6 +363,7 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 		}
 
 		for _, t := range sec.Ints {
+			intsTypes[t.Name] = true
 			xprintMultiline("", t.Docs, true)
 			name := typescriptName(t.Name, typescriptNames)
 			xprintf("enum %s {\n", name)
@@ -372,6 +378,7 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 		}
 
 		for _, t := range sec.Strings {
+			stringsTypes[t.Name] = true
 			xprintMultiline("", t.Docs, true)
 			name := typescriptName(t.Name, typescriptNames)
 			xprintf("enum %s {\n", name)
@@ -397,23 +404,9 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 			xprintf("	%s: %s,\n", mustMarshalJSON(typ.Name), mustMarshalJSON(typ))
 		}
 		for _, typ := range sec.Ints {
-			if typ.Values == nil {
-				typ.Values = []struct {
-					Name  string
-					Value int
-					Docs  string
-				}{}
-			}
 			xprintf("	%s: %s,\n", mustMarshalJSON(typ.Name), mustMarshalJSON(typ))
 		}
 		for _, typ := range sec.Strings {
-			if typ.Values == nil {
-				typ.Values = []struct {
-					Name  string
-					Value string
-					Docs  string
-				}{}
-			}
 			xprintf("	%s: %s,\n", mustMarshalJSON(typ.Name), mustMarshalJSON(typ))
 		}
 
@@ -492,6 +485,9 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 		xprintf("namespace %s {\n\n", opts.Namespace)
 	}
 	generateTypes(&doc)
+	xprintf("export const structTypes: {[typename: string]: boolean} = %s\n", mustMarshalJSON(structTypes))
+	xprintf("export const stringsTypes: {[typename: string]: boolean} = %s\n", mustMarshalJSON(stringsTypes))
+	xprintf("export const intsTypes: {[typename: string]: boolean} = %s\n", mustMarshalJSON(intsTypes))
 	xprintf("export const apiTypes: TypenameMap = {\n")
 	generateFunctionTypes(&typesdoc)
 	xprintf("}\n\n")

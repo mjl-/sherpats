@@ -7,18 +7,6 @@ const libTS = `export const defaultBaseURL = BASEURL
 
 export const supportedSherpaVersion = 1
 
-export function isStruct(t: NamedType): t is Struct {
-	return 'Fields' in t
-}
-
-export function isStrings(t: NamedType): t is Strings {
-	return 'Values' in t && typeof t.Values[0].Value === 'string'
-}
-
-export function isInts(t: NamedType): t is Ints {
-	return 'Values' in t && typeof t.Values[0].Value === 'number'
-}
-
 export interface Section {
 	Name: string
 	Docs: string
@@ -63,7 +51,7 @@ export interface Ints {
 		Name: string
 		Value: number
 		Docs: string
-	}[]
+	}[] | null
 }
 
 export interface Strings {
@@ -73,7 +61,7 @@ export interface Strings {
 		Name: string
 		Value: string
 		Docs: string
-	}[]
+	}[] | null
 }
 
 export type NamedType = Struct | Strings | Ints
@@ -189,19 +177,20 @@ class verifier {
 			error('bad value ' + v + ' for named type ' + w)
 		}
 
-		if (isStruct(nt)) {
+		if (structTypes[nt.Name]) {
+			const t = nt as Struct
 			if (typeof v !== 'object') {
 				error('bad value ' + v + ' for struct ' + w)
 			}
 
 			const r: any = {}
-			for (const f of nt.Fields) {
+			for (const f of t.Fields) {
 				r[f.Name] = this.verify(path + '.' + f.Name, v[f.Name], f.Typewords)
 			}
 			// If going to JSON also verify no unknown fields are present.
 			if (!this.allowUnknownKeys) {
 				const known: { [key: string]: boolean } = {}
-				for (const f of nt.Fields) {
+				for (const f of t.Fields) {
 					known[f.Name] = true
 				}
 				Object.keys(v).forEach((k) => {
@@ -211,26 +200,34 @@ class verifier {
 				})
 			}
 			return r
-		} else if (isStrings(nt)) {
+		} else if (stringsTypes[nt.Name]) {
+			const t = nt as Strings
 			if (typeof v !== 'string') {
-				error('mistyped value ' + v + ' for named strings ' + nt.Name)
+				error('mistyped value ' + v + ' for named strings ' + t.Name)
 			}
-			for (const sv of nt.Values) {
+			if (!t.Values || t.Values.length === 0) {
+				return v
+			}
+			for (const sv of t.Values) {
 				if (sv.Value === v) {
 					return v
 				}
 			}
-			error('unknkown value ' + v + ' for named strings ' + nt.Name)
-		} else if (isInts(nt)) {
+			error('unknkown value ' + v + ' for named strings ' + t.Name)
+		} else if (intsTypes[nt.Name]) {
+			const t = nt as Ints
 			if (typeof v !== 'number' || !Number.isInteger(v)) {
-				error('mistyped value ' + v + ' for named ints ' + nt.Name)
+				error('mistyped value ' + v + ' for named ints ' + t.Name)
 			}
-			for (const sv of nt.Values) {
+			if (!t.Values || t.Values.length === 0) {
+				return v
+			}
+			for (const sv of t.Values) {
 				if (sv.Value === v) {
 					return v
 				}
 			}
-			error('unknkown value ' + v + ' for named ints ' + nt.Name)
+			error('unknkown value ' + v + ' for named ints ' + t.Name)
 		} else {
 			throw new Error('unexpected named type ' + nt)
 		}
