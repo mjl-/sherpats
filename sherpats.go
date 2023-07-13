@@ -178,6 +178,12 @@ type Options struct {
 	// common (though not always the case!) in Go server code to not make a difference
 	// between a missing field and a null value
 	NullableOptional bool
+
+	// If set, "[]uint8" is changed into "string" before before interpreting the
+	// sherpadoc definitions. Go's JSON marshaller turns []byte (which is []uint8) into
+	// base64 strings. Having the same types in TypeScript is convenient.
+	// If SlicesNullable is set, the strings are made nullable.
+	BytesToString bool
 }
 
 // Generate reads sherpadoc from in and writes a typescript file containing a
@@ -206,6 +212,48 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 	const sherpadocVersion = 1
 	if doc.SherpadocVersion != sherpadocVersion {
 		panic(genError{fmt.Errorf("unexpected sherpadoc version %d, expected %d", doc.SherpadocVersion, sherpadocVersion)})
+	}
+
+	if opts.BytesToString {
+		toString := func(tw []string) []string {
+			n := len(tw) - 1
+			for i := 0; i < n; i++ {
+				if tw[i] == "[]" && tw[i+1] == "uint8" {
+					if opts.SlicesNullable && (i == 0 || tw[i-1] != "nullable") {
+						tw[i] = "nullable"
+						tw[i+1] = "string"
+						i++
+					} else {
+						tw[i] = "string"
+						copy(tw[i+1:], tw[i+2:])
+						tw = tw[:len(tw)-1]
+						n--
+					}
+				}
+			}
+			return tw
+		}
+
+		var bytesToString func(sec *sherpadoc.Section)
+		bytesToString = func(sec *sherpadoc.Section) {
+			for i := range sec.Functions {
+				for j := range sec.Functions[i].Params {
+					sec.Functions[i].Params[j].Typewords = toString(sec.Functions[i].Params[j].Typewords)
+				}
+				for j := range sec.Functions[i].Returns {
+					sec.Functions[i].Returns[j].Typewords = toString(sec.Functions[i].Returns[j].Typewords)
+				}
+			}
+			for i := range sec.Structs {
+				for j := range sec.Structs[i].Fields {
+					sec.Structs[i].Fields[j].Typewords = toString(sec.Structs[i].Fields[j].Typewords)
+				}
+			}
+			for _, s := range sec.Sections {
+				bytesToString(s)
+			}
+		}
+		bytesToString(&doc)
 	}
 
 	// Validate the sherpadoc.

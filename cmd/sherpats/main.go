@@ -6,7 +6,7 @@
 // Example:
 //
 //	sherpadoc MyAPI >myapi.json
-//	sherpats -slices-nullable=true -nullable-optional=true -namespace myapi myapi < myapi.json > myapi.ts
+//	sherpats -bytes-to-string -slices-nullable -nullable-optional -namespace myapi myapi < myapi.json > myapi.ts
 package main
 
 import (
@@ -30,6 +30,7 @@ func main() {
 	flag.StringVar(&opts.Namespace, "namespace", "", "namespace to enclose generated typescript in")
 	flag.BoolVar(&opts.SlicesNullable, "slices-nullable", false, "generate nullable types in TypeScript for Go slices, to require TypeScript checks for null for slices")
 	flag.BoolVar(&opts.NullableOptional, "nullable-optional", false, "for nullable types (include slices with -slices-nullable=true), generate optional fields in TypeScript and allow undefined as value")
+	flag.BoolVar(&opts.BytesToString, "bytes-to-string", false, "turn []uint8, also known as []byte, into string before generating the api, matching Go's JSON package that marshals []byte as base64-encoded string")
 	flag.Usage = func() {
 		log.Println("usage: sherpats [flags] { api-path-elem | baseURL }")
 		flag.PrintDefaults()
