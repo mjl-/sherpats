@@ -75,6 +75,8 @@ export const verifyArg = (path: string, v: any, typewords: string[], toJS: boole
 	return new verifier(types, toJS, allowUnknownKeys, opts).verify(path, v, typewords)
 }
 
+export const parse = (name: string, v: any): any => verifyArg(name, v, [name], true, false, apiTypes, defaultOptions)
+
 class verifier {
 	constructor(private types: TypenameMap, private toJS: boolean, private allowUnknownKeys: boolean, private opts: Options) {
 	}

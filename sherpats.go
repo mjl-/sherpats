@@ -415,6 +415,23 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 		}
 	}
 
+	var generateParser func(sec *sherpadoc.Section)
+	generateParser = func(sec *sherpadoc.Section) {
+		for _, typ := range sec.Structs {
+			xprintf("	%s: (v: any) => parse(%s, v) as %s,\n", typ.Name, mustMarshalJSON(typ.Name), typ.Name)
+		}
+		for _, typ := range sec.Ints {
+			xprintf("	%s: (v: any) => parse(%s, v) as %s,\n", typ.Name, mustMarshalJSON(typ.Name), typ.Name)
+		}
+		for _, typ := range sec.Strings {
+			xprintf("	%s: (v: any) => parse(%s, v) as %s,\n", typ.Name, mustMarshalJSON(typ.Name), typ.Name)
+		}
+
+		for _, subsec := range sec.Sections {
+			generateParser(subsec)
+		}
+	}
+
 	var generateSectionDocs func(sec *sherpadoc.Section)
 	generateSectionDocs = func(sec *sherpadoc.Section) {
 		xprintMultiline("", sec.Docs, true)
@@ -491,11 +508,16 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 	xprintf("export const apiTypes: TypenameMap = {\n")
 	generateFunctionTypes(&typesdoc)
 	xprintf("}\n\n")
+	xprintf("export const parser = {\n")
+	generateParser(&doc)
+	xprintf("}\n\n")
 	generateSectionDocs(&doc)
-	xprintf(`export class Client {
+	xprintf(`let defaultOptions: Options = {slicesNullable: %v, nullableOptional: %v}
+
+export class Client {
 	constructor(private baseURL=defaultBaseURL, public options?: Options) {
 		if (!options) {
-			this.options = {slicesNullable: %v, nullableOptional: %v}
+			this.options = defaultOptions
 		}
 	}
 
