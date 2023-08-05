@@ -71,14 +71,14 @@ export type TypenameMap = { [k: string]: NamedType }
 // toJS indicate if the data is coming into JS. If so, timestamps are turned into JS Dates. Otherwise, JS Dates are turned into strings.
 // allowUnknownKeys configures whether unknown keys in structs are allowed.
 // types are the named types of the API.
-export const verifyArg = (path: string, v: any, typewords: string[], toJS: boolean, allowUnknownKeys: boolean, types: TypenameMap, opts: Options): any => {
+export const verifyArg = (path: string, v: any, typewords: string[], toJS: boolean, allowUnknownKeys: boolean, types: TypenameMap, opts: ClientOptions): any => {
 	return new verifier(types, toJS, allowUnknownKeys, opts).verify(path, v, typewords)
 }
 
-export const parse = (name: string, v: any): any => verifyArg(name, v, [name], true, false, apiTypes, defaultOptions)
+export const parse = (name: string, v: any): any => verifyArg(name, v, [name], true, false, types, defaultOptions)
 
 class verifier {
-	constructor(private types: TypenameMap, private toJS: boolean, private allowUnknownKeys: boolean, private opts: Options) {
+	constructor(private types: TypenameMap, private toJS: boolean, private allowUnknownKeys: boolean, private opts: ClientOptions) {
 	}
 
 	verify(path: string, v: any, typewords: string[]): any {
@@ -118,6 +118,9 @@ class verifier {
 			ensure(Array.isArray(v), "array")
 			return v.map((e: any, i: number) => this.verify(path + '[' + i + ']', e, typewords))
 		case '{}':
+			if (v === null && this.opts.mapsNullable || v === undefined && this.opts.mapsNullable && this.opts.nullableOptional) {
+				return v
+			}
 			ensure(v !== null || typeof v === 'object', "object")
 			const r: any = {}
 			for (const k in v) {
@@ -237,21 +240,22 @@ class verifier {
 }
 
 
-export interface Options {
+export interface ClientOptions {
 	aborter?: {abort?: () => void}
 	timeoutMsec?: number
 	skipParamCheck?: boolean
 	skipReturnCheck?: boolean
 	slicesNullable?: boolean
+	mapsNullable?: boolean
 	nullableOptional?: boolean
 }
 
-const _sherpaCall = async (baseURL: string, options: Options, paramTypes: string[][], returnTypes: string[][], name: string, params: any[]): Promise<any> => {
+const _sherpaCall = async (baseURL: string, options: ClientOptions, paramTypes: string[][], returnTypes: string[][], name: string, params: any[]): Promise<any> => {
 	if (!options.skipParamCheck) {
 		if (params.length !== paramTypes.length) {
 			return Promise.reject({ message: 'wrong number of parameters in sherpa call, saw ' + params.length + ' != expected ' + paramTypes.length })
 		}
-		params = params.map((v: any, index: number) => verifyArg('params[' + index + ']', v, paramTypes[index], false, false, apiTypes, options))
+		params = params.map((v: any, index: number) => verifyArg('params[' + index + ']', v, paramTypes[index], false, false, types, options))
 	}
 	const simulate = async (json: string) => {
 		const config = JSON.parse(json || 'null') || {}
@@ -349,12 +353,12 @@ const _sherpaCall = async (baseURL: string, options: Options, paramTypes: string
 						throw new Error('function ' + name + ' returned a value while prototype says it returns "void"')
 					}
 				} else if (returnTypes.length === 1) {
-					result = verifyArg('result', result, returnTypes[0], true, true, apiTypes, options)
+					result = verifyArg('result', result, returnTypes[0], true, true, types, options)
 				} else {
 					if (result.length != returnTypes.length) {
 						throw new Error('wrong number of values returned by ' + name + ', saw ' + result.length + ' != expected ' + returnTypes.length)
 					}
-					result = result.map((v: any, index: number) => verifyArg('result[' + index + ']', v, returnTypes[index], true, true, apiTypes, options))
+					result = result.map((v: any, index: number) => verifyArg('result[' + index + ']', v, returnTypes[index], true, true, types, options))
 				}
 			} catch (err) {
 				let errmsg = 'bad types'

@@ -24,8 +24,8 @@ Written by Mechiel Lukkien, mechiel@ueber.net, MIT-licensed, feedback welcome.
 
 # Todo
 
+- linewrap long comments for fields in generated types.
 - check if identifiers (type names, function names) are keywords in typescript. if so, rename them so they are not, and don't clash with existing names.
 - better error types? how is this normally done in typescript? error classes?
 - add an example of a generated api
-- remove Docs from currently full sherpadoc JSON definitions for named types that we include for type checking
 - write tests, both for go and for the generated typescript

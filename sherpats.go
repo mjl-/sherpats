@@ -164,15 +164,16 @@ type Options struct {
 	// api, while keeping all types/functions isolated.
 	Namespace string
 
-	// With SlicesNullable, generated typescript types are made nullable, with "|
-	// null". Go's JSON package marshals a nil slice to null, so it can be wise to make
-	// TypeScript consumers check that. Go code typically handles incoming nil and
-	// empty slices in the same way.
+	// With SlicesNullable and MapsNullable, generated typescript types are made
+	// nullable, with "| null". Go's JSON package marshals a nil slice/map to null, so
+	// it can be wise to make TypeScript consumers check that. Go code typically
+	// handles incoming nil and empty slices/maps in the same way.
 	SlicesNullable bool
+	MapsNullable   bool
 
 	// If nullables are optional, the generated typescript types allow the "undefined"
-	// value where nullable values are expected. This includes slices when
-	// SlicesNullable is set. When JavaScript marshals JSON, a field with the
+	// value where nullable values are expected. This includes slices/maps when
+	// SlicesNullable/MapsNullable is set. When JavaScript marshals JSON, a field with the
 	// "undefined" value is treated as if the field doesn't exist, and isn't
 	// marshalled. The "undefined" value in an array is marshalled as null. It is
 	// common (though not always the case!) in Go server code to not make a difference
@@ -352,7 +353,7 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 				lines := xprintMultiline("", f.Docs, false)
 				what := fmt.Sprintf("field %s for type %s", f.Name, t.Name)
 				optional := ""
-				if opts.NullableOptional && f.Typewords[0] == "nullable" || opts.NullableOptional && opts.SlicesNullable && f.Typewords[0] == "[]" {
+				if opts.NullableOptional && f.Typewords[0] == "nullable" || opts.NullableOptional && (opts.SlicesNullable && f.Typewords[0] == "[]" || opts.MapsNullable && f.Typewords[0] == "{}") {
 					optional = "?"
 				}
 				xprintf("\t%s%s: %s", typescriptName(f.Name, names), optional, typescriptType(what, f.Typewords))
@@ -366,6 +367,10 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 			intsTypes[t.Name] = true
 			xprintMultiline("", t.Docs, true)
 			name := typescriptName(t.Name, typescriptNames)
+			if len(t.Values) == 0 {
+				xprintf("export type %s = number\n\n", name)
+				continue
+			}
 			xprintf("export enum %s {\n", name)
 			names := map[string]string{}
 			for _, v := range t.Values {
@@ -381,6 +386,10 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 			stringsTypes[t.Name] = true
 			xprintMultiline("", t.Docs, true)
 			name := typescriptName(t.Name, typescriptNames)
+			if len(t.Values) == 0 {
+				xprintf("export type %s = string\n\n", name)
+				continue
+			}
 			xprintf("export enum %s {\n", name)
 			names := map[string]string{}
 			for _, v := range t.Values {
@@ -505,27 +514,27 @@ func Generate(in io.Reader, out io.Writer, apiNameBaseURL string, opts Options) 
 	xprintf("export const structTypes: {[typename: string]: boolean} = %s\n", mustMarshalJSON(structTypes))
 	xprintf("export const stringsTypes: {[typename: string]: boolean} = %s\n", mustMarshalJSON(stringsTypes))
 	xprintf("export const intsTypes: {[typename: string]: boolean} = %s\n", mustMarshalJSON(intsTypes))
-	xprintf("export const apiTypes: TypenameMap = {\n")
+	xprintf("export const types: TypenameMap = {\n")
 	generateFunctionTypes(&typesdoc)
 	xprintf("}\n\n")
 	xprintf("export const parser = {\n")
 	generateParser(&doc)
 	xprintf("}\n\n")
 	generateSectionDocs(&doc)
-	xprintf(`let defaultOptions: Options = {slicesNullable: %v, nullableOptional: %v}
+	xprintf(`let defaultOptions: ClientOptions = {slicesNullable: %v, mapsNullable: %v, nullableOptional: %v}
 
 export class Client {
-	constructor(private baseURL=defaultBaseURL, public options?: Options) {
+	constructor(private baseURL=defaultBaseURL, public options?: ClientOptions) {
 		if (!options) {
 			this.options = defaultOptions
 		}
 	}
 
-	withOptions(options: Options): Client {
+	withOptions(options: ClientOptions): Client {
 		return new Client(this.baseURL, { ...this.options, ...options })
 	}
 
-`, opts.SlicesNullable, opts.NullableOptional)
+`, opts.SlicesNullable, opts.MapsNullable, opts.NullableOptional)
 	generateFunctions(&doc)
 	xprintf("}\n\n")
 
