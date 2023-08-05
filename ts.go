@@ -238,7 +238,7 @@ class verifier {
 
 
 export interface Options {
-	abort?: () => void
+	aborter?: {abort?: () => void}
 	timeoutMsec?: number
 	skipParamCheck?: boolean
 	skipReturnCheck?: boolean
@@ -253,16 +253,18 @@ const _sherpaCall = async (baseURL: string, options: Options, paramTypes: string
 		}
 		params = params.map((v: any, index: number) => verifyArg('params[' + index + ']', v, paramTypes[index], false, false, apiTypes, options))
 	}
-	const simulate = async () => {
-		const config = JSON.parse(window.localStorage.getItem('sherpats-debug') || '{}')
+	const simulate = async (json: string) => {
+		const config = JSON.parse(json || 'null') || {}
 		const waitMinMsec = config.waitMinMsec || 0
 		const waitMaxMsec = config.waitMaxMsec || 0
 		const wait = Math.random() * (waitMaxMsec - waitMinMsec)
 		const failRate = config.failRate || 0
 		return new Promise<void>((resolve, reject) => {
-			options.abort = () => {
-				reject({ message: 'call to ' + name + ' aborted by user', code: 'server:aborted' })
-				reject = resolve = () => { }
+			if (options.aborter) {
+				options.aborter.abort = () => {
+					reject({ message: 'call to ' + name + ' aborted by user', code: 'sherpa:aborted' })
+					reject = resolve = () => { }
+				}
 			}
 			setTimeout(() => {
 				const r = Math.random()
@@ -275,99 +277,107 @@ const _sherpaCall = async (baseURL: string, options: Options, paramTypes: string
 			}, waitMinMsec + wait)
 		})
 	}
+	// Only simulate when there is a debug string. Otherwise it would always interfere
+	// with setting options.aborter.
+	let json: string = ''
+	try {
+		json = window.localStorage.getItem('sherpats-debug') || ''
+	} catch (err) {}
+	if (json) {
+		await simulate(json)
+	}
 
-	const call = async (): Promise<any> => {
-		return new Promise((resolve, reject) => {
-			let resolve1 = (v: { code: string, message: string }) => {
-				resolve(v)
-				resolve1 = () => { }
-				reject1 = () => { }
-			}
-			let reject1 = (v: { code: string, message: string }) => {
-				reject(v)
-				resolve1 = () => { }
-				reject1 = () => { }
-			}
+	// Immediately create promise, so options.aborter is changed before returning.
+	const promise = new Promise((resolve, reject) => {
+		let resolve1 = (v: { code: string, message: string }) => {
+			resolve(v)
+			resolve1 = () => { }
+			reject1 = () => { }
+		}
+		let reject1 = (v: { code: string, message: string }) => {
+			reject(v)
+			resolve1 = () => { }
+			reject1 = () => { }
+		}
 
-			const url = baseURL + name
-			const req = new (window as any).XMLHttpRequest();
-			options.abort = () => {
+		const url = baseURL + name
+		const req = new window.XMLHttpRequest()
+		if (options.aborter) {
+			options.aborter.abort = () => {
 				req.abort()
 				reject1({ code: 'sherpa:aborted', message: 'request aborted' })
 			}
-			req.open('POST', url, true)
-			if (options.timeoutMsec) {
-				req.timeout = options.timeoutMsec
-			}
-			req.onload = () => {
-				if (req.status !== 200) {
-					if (req.status === 404) {
-						reject1({ code: 'sherpa:badFunction', message: 'function does not exist' })
-					} else {
-						reject1({ code: 'sherpa:http', message: 'error calling function, HTTP status: ' + req.status })
-					}
-					return
+		}
+		req.open('POST', url, true)
+		if (options.timeoutMsec) {
+			req.timeout = options.timeoutMsec
+		}
+		req.onload = () => {
+			if (req.status !== 200) {
+				if (req.status === 404) {
+					reject1({ code: 'sherpa:badFunction', message: 'function does not exist' })
+				} else {
+					reject1({ code: 'sherpa:http', message: 'error calling function, HTTP status: ' + req.status })
 				}
+				return
+			}
 
-				let resp: any
-				try {
-					resp = JSON.parse(req.responseText)
-				} catch (err) {
-					reject1({ code: 'sherpa:badResponse', message: 'bad JSON from server' })
-					return
-				}
-				if (resp && resp.error) {
-					const err = resp.error
-					reject1({ code: err.code, message: err.message })
-					return
-				} else if (!resp || !resp.hasOwnProperty('result')) {
-					reject1({ code: 'sherpa:badResponse', message: "invalid sherpa response object, missing 'result'" })
-					return
-				}
-
-				if (options.skipReturnCheck) {
-					resolve1(resp.result)
-					return
-				}
-				let result = resp.result
-				try {
-					if (returnTypes.length === 0) {
-						if (result) {
-							throw new Error('function ' + name + ' returned a value while prototype says it returns "void"')
-						}
-					} else if (returnTypes.length === 1) {
-						result = verifyArg('result', result, returnTypes[0], true, true, apiTypes, options)
-					} else {
-						if (result.length != returnTypes.length) {
-							throw new Error('wrong number of values returned by ' + name + ', saw ' + result.length + ' != expected ' + returnTypes.length)
-						}
-						result = result.map((v: any, index: number) => verifyArg('result[' + index + ']', v, returnTypes[index], true, true, apiTypes, options))
-					}
-				} catch (err) {
-					let errmsg = 'bad types'
-					if (err instanceof Error) {
-						errmsg = err.message
-					}
-					reject1({ code: 'sherpa:badTypes', message: errmsg })
-				}
-				resolve1(result)
-			}
-			req.onerror = () => {
-				reject1({ code: 'sherpa:connection', message: 'connection failed' })
-			}
-			req.ontimeout = () => {
-				reject1({ code: 'sherpa:timeout', message: 'request timeout' })
-			}
-			req.setRequestHeader('Content-Type', 'application/json')
+			let resp: any
 			try {
-				req.send(JSON.stringify({ params: params }))
+				resp = JSON.parse(req.responseText)
 			} catch (err) {
-				reject1({ code: 'sherpa:badData', message: 'cannot marshal to JSON' })
+				reject1({ code: 'sherpa:badResponse', message: 'bad JSON from server' })
+				return
 			}
-		})
-	}
+			if (resp && resp.error) {
+				const err = resp.error
+				reject1({ code: err.code, message: err.message })
+				return
+			} else if (!resp || !resp.hasOwnProperty('result')) {
+				reject1({ code: 'sherpa:badResponse', message: "invalid sherpa response object, missing 'result'" })
+				return
+			}
 
-	await simulate()
-	return await call()
+			if (options.skipReturnCheck) {
+				resolve1(resp.result)
+				return
+			}
+			let result = resp.result
+			try {
+				if (returnTypes.length === 0) {
+					if (result) {
+						throw new Error('function ' + name + ' returned a value while prototype says it returns "void"')
+					}
+				} else if (returnTypes.length === 1) {
+					result = verifyArg('result', result, returnTypes[0], true, true, apiTypes, options)
+				} else {
+					if (result.length != returnTypes.length) {
+						throw new Error('wrong number of values returned by ' + name + ', saw ' + result.length + ' != expected ' + returnTypes.length)
+					}
+					result = result.map((v: any, index: number) => verifyArg('result[' + index + ']', v, returnTypes[index], true, true, apiTypes, options))
+				}
+			} catch (err) {
+				let errmsg = 'bad types'
+				if (err instanceof Error) {
+					errmsg = err.message
+				}
+				reject1({ code: 'sherpa:badTypes', message: errmsg })
+			}
+			resolve1(result)
+		}
+		req.onerror = () => {
+			reject1({ code: 'sherpa:connection', message: 'connection failed' })
+		}
+		req.ontimeout = () => {
+			reject1({ code: 'sherpa:timeout', message: 'request timeout' })
+		}
+		req.setRequestHeader('Content-Type', 'application/json')
+		try {
+			req.send(JSON.stringify({ params: params }))
+		} catch (err) {
+			reject1({ code: 'sherpa:badData', message: 'cannot marshal to JSON' })
+		}
+	})
+	return await promise
 }
 `
